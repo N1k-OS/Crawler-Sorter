@@ -21,9 +21,6 @@ from pydantic import BaseModel
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 
 # ==========================================
-# KONFIGURATION
-# ==========================================
-# ==========================================
 # KONFIGURATION (aus config.json laden)
 # ==========================================
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -60,14 +57,6 @@ MODELLE = [
 IGNORED_EXTENSIONS = {".ico", ".woff", ".woff2", ".ttf", ".eot"}
 IGNORED_FILENAMES = {"favicon.ico", "apple-touch-icon.png", "robots.txt"}
 
-CHROME_PROFILE_DIR = SCRIPT_DIR / "chrome_moodle_profile"
-STATE_FILENAME = ".sort_state.json"
-
-# Dateiendungen & Namen, die niemals heruntergeladen werden sollen
-IGNORED_EXTENSIONS = {".ico", ".woff", ".woff2", ".ttf", ".eot"}
-IGNORED_FILENAMES = {"favicon.ico", "apple-touch-icon.png", "robots.txt"}
-
-SCRIPT_DIR = Path(__file__).resolve().parent
 CHROME_PROFILE_DIR = SCRIPT_DIR / "chrome_moodle_profile"
 STATE_FILENAME = ".sort_state.json"
 
@@ -140,7 +129,7 @@ def is_junk_file(filename: str, content_type: str = "", url: str = "") -> bool:
     lower_url = url.lower()
     if lower_name in IGNORED_FILENAMES:
         return True
-    if "/theme/" in lower_url or "theme/image.php" in lower_url:
+    if "/theme/" in lower_url or "theme/image.php" in lower_url or "/user/icon/" in lower_url:
         return True
     if Path(lower_name).suffix in IGNORED_EXTENSIONS:
         return True
@@ -317,7 +306,7 @@ def classify_and_sort_files(kurs_dir: Path, force: bool = False, file_hashes: di
     for f in irrelevant_files:
         print(f"  [DEL] Irrelevante Datei entfernt: {f.name}")
         f.unlink(missing_ok=True)
-        root_files.remove(f)
+    root_files = [f for f in root_files if f not in irrelevant_files]
 
     save_state(kurs_dir, classified, saved_hashes)
 
@@ -342,13 +331,6 @@ def classify_and_sort_files(kurs_dir: Path, force: bool = False, file_hashes: di
                 print(f"  -> {kat}/{f.name}")
         elif f in new_files:
             print(f"  -> {f.name} (bleibt im Root)")
-
-def sort_existing_folder(folder_path: Path, force: bool = False):
-    if not folder_path.exists():
-        print(f"Ordner nicht gefunden: {folder_path}")
-        return
-    print(f"\n=== Prüfe Ordner: {folder_path.name} ===")
-    classify_and_sort_files(folder_path, force=force)
 
 def sort_existing_folder(folder_path: Path, force: bool = False):
     if not folder_path.exists():
@@ -408,8 +390,8 @@ def try_autofill_login(page):
             passkey_btn.wait_for(state="visible", timeout=6_000)
             passkey_btn.click()
             print("[INFO] Passkey-Abfrage gestartet (bei Abbruch einfach 6-stelligen Code eingeben)...")
-    except Exception:
-        pass
+    except Exception as e:
+        logging.debug("Auto-Login fehlgeschlagen: %s", e)
 
 def ensure_logged_in(p, test_url: str, force_login: bool = False):
     moodle_domain = urlparse(test_url).netloc.lower()
@@ -424,8 +406,8 @@ def ensure_logged_in(p, test_url: str, force_login: bool = False):
         try:
             page.goto(test_url, wait_until="domcontentloaded", timeout=20_000)
             page.wait_for_timeout(1500)
-        except Exception:
-            pass
+        except Exception as e:
+            logging.debug("Navigation fehlgeschlagen: %s", e)
         if is_moodle_logged_in(context, moodle_domain):
             return context
         context.close()
@@ -491,6 +473,44 @@ def get_unique_filename(base_name: str, existing_map: dict[str, Path]) -> str:
             return candidate
         counter += 1
 
+def _is_ignored_pluginfile_url(url: str) -> bool:
+    lower_url = url.lower()
+    return any(p in lower_url for p in ("/theme/", "theme/image.php", "/user/icon/"))
+
+def _extract_pluginfile_url(page_html: str) -> str | None:
+    """Extrahiert gezielt die Ressourcen-URL aus Moodle-Pop-up- oder Vorschau-HTML."""
+    normalized = page_html.replace(r"\/", "/")
+
+    # 1. Direktes window.open('.../pluginfile.php/...')
+    for m in re.finditer(r'window\.open\(\s*["\']([^"\']*?/pluginfile\.php/[^"\']+)["\']', normalized, flags=re.IGNORECASE):
+        candidate = html.unescape(m.group(1))
+        if not _is_ignored_pluginfile_url(candidate):
+            return candidate
+
+    # 2. Moodle-Workaround-Container (.resourceworkaround) oder eingebettetes Objekt (.resourcecontent)
+    for m in re.finditer(
+        r'class=["\'][^"\']*\b(?:resourceworkaround|resourcecontent)\b[^"\']*["\'].*?(?:href|src|data)\s*=\s*["\']([^"\']*?/pluginfile\.php/[^"\']+)["\']',
+        normalized,
+        flags=re.IGNORECASE | re.DOTALL,
+    ):
+        candidate = html.unescape(m.group(1))
+        if not _is_ignored_pluginfile_url(candidate):
+            return candidate
+
+    # 3. Innerhalb von #region-main suchen (überspringt Header, Navbar und Profilbilder)
+    region_idx = normalized.lower().find('id="region-main"')
+    if region_idx == -1:
+        region_idx = normalized.lower().find("id='region-main'")
+    search_areas = [normalized[region_idx:], normalized] if region_idx != -1 else [normalized]
+
+    for area in search_areas:
+        for m in re.finditer(r'["\']([^"\']*?/pluginfile\.php/[^"\']+)["\']', area, flags=re.IGNORECASE):
+            candidate = html.unescape(m.group(1))
+            if not _is_ignored_pluginfile_url(candidate):
+                return candidate
+
+    return None
+
 def try_download_resource(
     context,
     href: str,
@@ -509,7 +529,15 @@ def try_download_resource(
             return True
 
         req_headers = {"Referer": referer} if referer else None
-        resp = context.request.get(clean_href, headers=req_headers, timeout=25_000)
+        parsed_clean = urlparse(clean_href)
+        request_href = clean_href
+        if "/mod/resource/view.php" in parsed_clean.path and "redirect=" not in parsed_clean.query.lower():
+            sep = "&" if parsed_clean.query else "?"
+            request_href = f"{clean_href}{sep}redirect=1"
+
+        resp = context.request.get(request_href, headers=req_headers, timeout=25_000)
+        if not resp.ok and request_href != clean_href:
+            resp = context.request.get(clean_href, headers=req_headers, timeout=25_000)
         if not resp.ok:
             return False
 
@@ -517,11 +545,10 @@ def try_download_resource(
 
         # HTML-Vorschauseiten & Pop-ups (inkl. window.open('.../pluginfile.php/...')) auflösen
         if "text/html" in ctype:
-            page_html = resp.text()
-            m = re.search(r'["\']([^"\']*?/pluginfile\.php/[^"\']+)["\']', page_html, flags=re.IGNORECASE)
-            if not m:
+            raw_plugin_url = _extract_pluginfile_url(resp.text())
+            if not raw_plugin_url:
                 return False
-            plugin_url = urljoin(resp.url, html.unescape(m.group(1)))
+            plugin_url = urljoin(resp.url, raw_plugin_url)
             resp = context.request.get(plugin_url, headers={"Referer": resp.url}, timeout=25_000)
             ctype = resp.headers.get("content-type", "").lower()
             if not resp.ok or "text/html" in ctype:
@@ -578,7 +605,8 @@ def try_download_resource(
         updated_files.append(fname)
         print(f"  [DL] {fname}")
         return True
-    except Exception:
+    except Exception as e:
+        logging.debug("Download fehlgeschlagen für %s: %s", href, e)
         return False
 
 def normalize_quiz_url(href: str) -> str:
@@ -785,32 +813,52 @@ def expand_all_moodle_sections(page):
     # 1. Globalen "Alle aufklappen" / "Expand all" Button nutzen, falls vorhanden
     try:
         expand_all = page.locator(
-            "#region-main [data-action='expandall'], #region-main a.collapseall, #region-main button.collapseall"
+            "#page-content [data-action='expandall'], "
+            "#page-content a.collapseall, "
+            "#page-content button.collapseall, "
+            "#collapsesections"
         ).first
         if expand_all.count() > 0 and expand_all.is_visible():
-            btn_text = (expand_all.inner_text() or "").lower()
-            if any(w in btn_text for w in ("aufklappen", "expand", "alle öffnen")):
+            btn_label = " ".join([
+                expand_all.inner_text() or "",
+                expand_all.get_attribute("aria-label") or "",
+                expand_all.get_attribute("title") or "",
+            ]).lower()
+            is_collapsed = (expand_all.get_attribute("aria-expanded") or "").lower() == "false"
+            wants_expand = any(w in btn_label for w in ("aufklappen", "expand", "alle öffnen")) or is_collapsed
+            is_collapse_only = any(w in btn_label for w in ("einklappen", "collapse all", "alle schließen")) and not is_collapsed
+            if wants_expand and not is_collapse_only:
                 expand_all.click()
-                page.wait_for_timeout(1200)
+                try:
+                    page.wait_for_load_state("networkidle", timeout=6_000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(1000)
     except Exception:
         pass
 
-    # 2. Alle noch geschlossenen Abschnitte einzeln aufklappen
-    for _ in range(3):
+    # 2. Alle noch geschlossenen Abschnitte einzeln aufklappen (inkl. nachgeladener Unterabschnitte)
+    for _ in range(5):
         toggles = page.locator(
             "#region-main [data-toggle='collapse'][aria-expanded='false'], "
             "#region-main [data-bs-toggle='collapse'][aria-expanded='false'], "
+            "#region-main [data-for='sectiontoggler'][aria-expanded='false'], "
             "#region-main .icons-collapse-expand.collapsed"
         ).all()
         if not toggles:
             break
+        clicked_any = False
         for toggle in toggles:
             try:
                 if toggle.is_visible():
+                    toggle.scroll_into_view_if_needed(timeout=2_000)
                     toggle.click(timeout=2_000)
-                    page.wait_for_timeout(250)
+                    clicked_any = True
+                    page.wait_for_timeout(300)
             except Exception:
                 pass
+        if not clicked_any:
+            break
         try:
             page.wait_for_load_state("networkidle", timeout=6_000)
         except Exception:
@@ -846,11 +894,13 @@ def process_course(
     print(f"    Ziel: {target_folder}")
 
     classified_state, known_hashes, url_map = load_state(target_folder)
-    existing_map = {
-        normalize_name(f.name): f
-        for f in target_folder.rglob("*")
-        if f.is_file() and not f.name.startswith((".", "_")) and "MoodleTests" not in f.parts
-    }
+    existing_map: dict[str, Path] = {}
+    for f in sorted(target_folder.rglob("*"), key=lambda p: (len(p.parts), str(p))):
+        if f.is_file() and not f.name.startswith((".", "_")) and "MoodleTests" not in f.parts:
+            norm = normalize_name(f.name)
+            expected_kat = classified_state.get(norm)
+            if norm not in existing_map or (expected_kat and expected_kat in f.parts):
+                existing_map[norm] = f
     url_map = {k: v for k, v in url_map.items() if v in existing_map}
 
     updated_files: list[str] = []
@@ -876,6 +926,23 @@ def process_course(
         is_sub_activity = any(p in current_url for p in ("/mod/assign/", "/mod/page/"))
         if not is_sub_activity:
             expand_all_moodle_sections(page)
+
+        # Auf der Kurs-Hauptseite auch Section-Links aus dem Moodle-4-Kursindex einsammeln
+        if current_url == kurs_url and course_id:
+            for nav_link in page.locator("#courseindex a, nav.courseindex a").all():
+                nav_href = nav_link.get_attribute("href")
+                if not nav_href or nav_href.startswith("#"):
+                    continue
+                full_nav = urljoin(current_url, nav_href).split("#")[0]
+                parsed_nav = urlparse(full_nav)
+                if moodle_domain in parsed_nav.netloc:
+                    is_nav_section = "/course/section.php" in parsed_nav.path or (
+                        "/course/view.php" in parsed_nav.path
+                        and parse_qs(parsed_nav.query).get("id", [None])[0] == course_id
+                        and "section" in parse_qs(parsed_nav.query)
+                    )
+                    if is_nav_section and full_nav not in visited_pages and full_nav not in pages_to_scan:
+                        pages_to_scan.append(full_nav)
 
         links = page.locator("#region-main a").all()
 
@@ -1010,13 +1077,13 @@ def main():
         return
 
     first_url = tasks[0][1]
-    moodle_domain = urlparse(first_url).netloc
 
     with sync_playwright() as p:
         context = ensure_logged_in(p, first_url, force_login=args.login)
         page = context.pages[0] if context.pages else context.new_page()
 
         for target_folder, kurs_url in tasks:
+            moodle_domain = urlparse(kurs_url).netloc
             process_course(
                 context,
                 page,
