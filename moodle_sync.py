@@ -745,7 +745,7 @@ def process_quizzes(context, target_folder: Path, quiz_links: list[tuple[str, st
             ))
 
             if is_critical and not allow_critical:
-                print(f"  [TEST-UEBERSPRUNGEN] '{raw_title}' hat Zeitlimit/Versuchslimit (nutze --quiz-critical-attempt zum Ausfuehren).")
+                print(f"  [TEST-UEBERSPRUNGEN] '{raw_title}' hat Zeitlimit/Versuchslimit (nutze --quiz-critical zum Ausfuehren).")
                 continue
 
             tests_dir.mkdir(parents=True, exist_ok=True)
@@ -1056,7 +1056,7 @@ def main():
     parser.add_argument("-o", "--output", help="Optionaler Zielordner (nur in Kombination mit -l)")
     parser.add_argument("--login", action="store_true", help="Erzwingt neuen Chrome-Login")
     parser.add_argument("--force", action="store_true", help="Ignoriert .sort_state.json und sortiert alles neu")
-    parser.add_argument("--quiz-critical-attempt", action="store_true", help="Erlaubt auch das Starten von Tests mit Zeitlimit oder begrenzten Versuchen")
+    parser.add_argument("--quiz-critical", action="store_true", help="Erlaubt auch das Starten von Tests mit Zeitlimit oder begrenzten Versuchen")
     args = parser.parse_args()
 
     if args.sort:

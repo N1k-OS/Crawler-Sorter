@@ -32,7 +32,7 @@ moodle-sync
 | :--- | :--- |
 | `--login` | Erzwingt das Öffnen des sichtbaren Chrome-Fensters für einen frischen Login (nützlich, falls die Session abgelaufen ist). |
 | `--force` | Ignoriert die gespeicherten Status-Dateien (`.sort_state.json` und `.quiz_state.json`), klassifiziert alle Dateien im Root neu und prüft alle Tests erneut. |
-| `--quiz-critical-attempt` | Erlaubt dem Skript, auch offene Moodle-Tests mit **Zeitbegrenzung** oder **begrenzten Versuchen** zu starten und abzufotografieren (standardmäßig aus Sicherheitsgründen deaktiviert). |
+| `--quiz-critical` | Erlaubt dem Skript, auch offene Moodle-Tests mit **Zeitbegrenzung** oder **begrenzten Versuchen** zu starten und abzufotografieren (standardmäßig aus Sicherheitsgründen deaktiviert). |
 | `-h` / `--help` | Zeigt eine Kurzübersicht aller Parameter im Terminal an. |
 
 **Praxis-Beispiele:**
@@ -73,7 +73,7 @@ moodle-sync --sort "C:\Users\Super\Documents\Studium\Hochschule\PDFs\IT-Systeme"
 * Gefundene Tests (`/mod/quiz/view.php`) werden im Unterordner `MoodleTests/` als Ganzseiten-Screenshots gesichert und alphanumerisch nummeriert (z. B. `01_Minitest_Lineare_Optimierung-1.png`, `01_Minitest_Lineare_Optimierung-2.png`).
 * **Bereits abgeschlossene Tests:** Das Skript öffnet deine letzte Überprüfung (`review.php`) mit `&showall=1`, sodass alle Fragen samt Lösungen auf einem Screenshot landen.
 * **Offene Selbsttests ohne Zeitlimit:** Das Skript klickt sich Seite für Seite durch den Versuch und fotografiert jede Frage ab, **ohne** den Versuch final abzugeben.
-* **Gesperrte oder zeitbegrenzte Tests:** Werden sicher übersprungen (außer du nutzt `--quiz-critical-attempt`).
+* **Gesperrte oder zeitbegrenzte Tests:** Werden sicher übersprungen (außer du nutzt `--quiz-critical`).
 
 ### E. Gruppierte Link-Liste (`_LINKS_FUER_NOTEBOOKLM.txt`)
 In jedem Kursordner wird eine Textdatei angelegt, die alle gefundenen Links sauber trennt:
