@@ -1,0 +1,14 @@
+# Secrets & lokale Konfiguration
+config.json
+
+# Chrome-Session & Passkey-Profil (enthaelt Login-Cookies!)
+chrome_moodle_profile/
+moodle_auth.json
+
+# Python-Cache & virtuelle Umgebungen
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+# Lokale Testdateien mit API-Keys
+TestVersion*

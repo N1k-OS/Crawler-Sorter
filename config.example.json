@@ -1,0 +1,10 @@
+{
+  "gemini_api_key": "DEIN_GEMINI_API_KEY",
+  "base_dir": "C:\\Pfad\\zu\\deinen\\PDFs",
+  "moodle_user": "dein_moodle_benutzername",
+  "moodle_pass": "dein_moodle_passwort",
+  "pdf_passwords": ["passwort1", "passwort2"],
+  "standard_kurse": {
+    "Fachname_1": "https://moodle.hm.edu/course/view.php?id=12345"
+  }
+}
